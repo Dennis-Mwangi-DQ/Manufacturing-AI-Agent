@@ -1,0 +1,14 @@
+.env
+.env.*
+!.env.example
+outputs/
+logs/
+.pytest_cache/
+__pycache__/
+*.pyc
+.venv/
+venv/
+.git/
+.gitignore
+sample_data/
+HANDOFF.md

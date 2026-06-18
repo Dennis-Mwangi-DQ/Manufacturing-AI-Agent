@@ -1,0 +1,49 @@
+services:
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile.api
+    restart: unless-stopped
+    environment:
+      DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:-}
+      DEEPSEEK_BASE_URL: ${DEEPSEEK_BASE_URL:-https://api.deepseek.com/v1}
+      DEEPSEEK_MODEL: ${DEEPSEEK_MODEL:-deepseek-chat}
+      OUTPUT_DIR: /app/outputs
+      MAX_FILE_SIZE_MB: ${MAX_FILE_SIZE_MB:-50}
+      DEFAULT_K_FACTOR: ${DEFAULT_K_FACTOR:-0.33}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      SESSION_SECRET: ${SESSION_SECRET:-change_me}
+      SUPABASE_URL: ${SUPABASE_URL:-}
+      SUPABASE_KEY: ${SUPABASE_KEY:-}
+    volumes:
+      - cad_outputs:/app/outputs
+      - cad_logs:/app/logs
+    expose:
+      - "8000"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health')"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+
+  streamlit:
+    build:
+      context: .
+      dockerfile: Dockerfile.streamlit
+    restart: unless-stopped
+    depends_on:
+      api:
+        condition: service_healthy
+    environment:
+      API_BASE_URL: http://api:8000
+      DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:-}
+      DEEPSEEK_BASE_URL: ${DEEPSEEK_BASE_URL:-https://api.deepseek.com/v1}
+      DEEPSEEK_MODEL: ${DEEPSEEK_MODEL:-deepseek-chat}
+      MAX_FILE_SIZE_MB: ${MAX_FILE_SIZE_MB:-50}
+    ports:
+      - "8501:8501"
+
+volumes:
+  cad_outputs:
+  cad_logs:
