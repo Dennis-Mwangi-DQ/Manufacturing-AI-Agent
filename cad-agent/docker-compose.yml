@@ -20,6 +20,8 @@ services:
       - cad_logs:/app/logs
     expose:
       - "8000"
+    networks:
+      - dokploy-network
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health')"]
       interval: 30s
@@ -42,8 +44,14 @@ services:
       DEEPSEEK_MODEL: ${DEEPSEEK_MODEL:-deepseek-chat}
       MAX_FILE_SIZE_MB: ${MAX_FILE_SIZE_MB:-50}
     ports:
-      - "8501:8501"
+      - "8501"
+    networks:
+      - dokploy-network
 
 volumes:
   cad_outputs:
   cad_logs:
+
+networks:
+  dokploy-network:
+    external: true
