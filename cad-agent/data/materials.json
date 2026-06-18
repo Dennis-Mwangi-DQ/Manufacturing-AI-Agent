@@ -1,0 +1,13 @@
+{
+  "materials": [
+    {"code": "ARMOX-500T", "name": "High-hardness armour steel", "density_g_cm3": 7.85, "k_factor": 0.33, "typical_application": "Hull panels, blast plates"},
+    {"code": "ARMOX-370T", "name": "Medium-hardness armour steel", "density_g_cm3": 7.85, "k_factor": 0.33, "typical_application": "Structural frames"},
+    {"code": "RHA-MIL", "name": "Rolled Homogeneous Armour", "density_g_cm3": 7.85, "k_factor": 0.35, "typical_application": "Legacy armour plating"},
+    {"code": "AL-5083", "name": "Aluminium alloy 5083-H116", "density_g_cm3": 2.66, "k_factor": 0.40, "typical_application": "Lightweight panels, hatches"},
+    {"code": "AL-7075", "name": "Aluminium alloy 7075-T6", "density_g_cm3": 2.81, "k_factor": 0.38, "typical_application": "High-strength brackets"},
+    {"code": "SS-316L", "name": "Stainless steel 316L", "density_g_cm3": 7.99, "k_factor": 0.34, "typical_application": "Sealing frames, wet area components"},
+    {"code": "MILD-S275", "name": "Structural mild steel S275", "density_g_cm3": 7.85, "k_factor": 0.33, "typical_application": "Interior secondary structure"},
+    {"code": "UHMWPE", "name": "Ultra-high-molecular-weight polyethylene", "density_g_cm3": 0.93, "k_factor": null, "typical_application": "Spall liner panels"},
+    {"code": "RUBBER-NR", "name": "Natural rubber compound", "density_g_cm3": 1.20, "k_factor": null, "typical_application": "Seals, vibration mounts"}
+  ]
+}
