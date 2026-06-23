@@ -72,6 +72,11 @@ def detect_format(file_path: str) -> str:
 # Filename metadata extraction (client convention)
 # ---------------------------------------------------------------------------
 
+def _metadata_source_path(file_path: str, original_filename: Optional[str] = None) -> str:
+    """Name used for client filename codes (uploads may be saved under a temp path)."""
+    return original_filename or file_path
+
+
 def parse_filename_metadata(file_path: str) -> dict:
     """Extract metadata encoded in the export filename.
 
@@ -93,6 +98,11 @@ def parse_filename_metadata(file_path: str) -> dict:
         "quantity": None,
         "part_number": None,
         "raw_code": None,
+        "engraving_name": None,
+        "revision": None,
+        "assy_code": None,
+        "sub_assembly_code": None,
+        "dxf_file_name": Path(file_path).name,
     }
 
     # Leading material/thickness code, e.g. "M4_", "B6.5_", "M8.5_".
@@ -122,7 +132,30 @@ def parse_filename_metadata(file_path: str) -> dict:
     if pn_match:
         meta["part_number"] = pn_match.group(1).upper()
 
+    rev_match = re.search(r"-DXF-(\d+)$", stem, re.IGNORECASE)
+    if rev_match:
+        meta["revision"] = int(rev_match.group(1))
+
+    if meta.get("part_number"):
+        segments = meta["part_number"].split("-", 1)
+        if len(segments) == 2 and segments[1] and segments[1][-1].isdigit():
+            meta["sub_assembly_code"] = segments[1][:-1] + "0"
+
+    project_assy = parse_project_assy_from_path(file_path)
+    if project_assy:
+        meta["assy_code"] = project_assy
+
+    if meta.get("part_number") and qty_match:
+        suffix = meta["part_number"].split("-", 1)[1]
+        meta["engraving_name"] = f"Q{qty_match.group(1)}-{suffix}"
+
     return meta
+
+
+def parse_project_assy_from_path(path: str) -> Optional[str]:
+    """Extract top-level assembly code (e.g. 12500) from a project folder path."""
+    match = re.search(r"T1B6-(\d{5})", path, re.IGNORECASE)
+    return match.group(1) if match else None
 
 
 # ---------------------------------------------------------------------------
@@ -323,7 +356,7 @@ def _parse_bend_layer_name(layer_name: str) -> dict:
 # DXF parsing (one file == one part)
 # ---------------------------------------------------------------------------
 
-def _parse_dxf(file_path: str) -> list[dict]:
+def _parse_dxf(file_path: str, original_filename: Optional[str] = None) -> list[dict]:
     """Parse a DXF flat pattern and return a single part dict.
 
     Annotation/drafting layers and text/dimension entities are excluded from
@@ -445,8 +478,9 @@ def _parse_dxf(file_path: str) -> list[dict]:
         except Exception:
             pass
 
-    filename_meta = parse_filename_metadata(file_path)
-    stem = Path(file_path).stem
+    metadata_source = _metadata_source_path(file_path, original_filename)
+    filename_meta = parse_filename_metadata(metadata_source)
+    stem = Path(metadata_source).stem
 
     if min_x == float("inf") or geometry_entities == 0:
         # No manufacturable geometry could be read. Report honestly rather
@@ -553,7 +587,7 @@ def _require_occ() -> None:
         raise RuntimeError(_OCC_MISSING_MSG) from exc
 
 
-def _parse_step_occ(file_path: str) -> list[dict]:
+def _parse_step_occ(file_path: str, original_filename: Optional[str] = None) -> list[dict]:
     """Parse a STEP file using pythonocc-core."""
     _require_occ()
     from OCC.Core.STEPControl import STEPControl_Reader  # type: ignore
@@ -577,7 +611,7 @@ def _parse_step_occ(file_path: str) -> list[dict]:
     while explorer.More():
         solid = explorer.Current()
         idx += 1
-        parts.append(_solid_to_part_dict(solid, idx, file_path, brepbndlib, brepgprop, "STEP"))
+        parts.append(_solid_to_part_dict(solid, idx, file_path, brepbndlib, brepgprop, "STEP", original_filename))
         explorer.Next()
 
     if not parts:
@@ -585,7 +619,7 @@ def _parse_step_occ(file_path: str) -> list[dict]:
         while explorer2.More():
             shell = explorer2.Current()
             idx += 1
-            parts.append(_solid_to_part_dict(shell, idx, file_path, brepbndlib, brepgprop, "STEP"))
+            parts.append(_solid_to_part_dict(shell, idx, file_path, brepbndlib, brepgprop, "STEP", original_filename))
             explorer2.Next()
 
     if not parts:
@@ -597,7 +631,7 @@ def _parse_step_occ(file_path: str) -> list[dict]:
     return parts
 
 
-def _parse_iges_occ(file_path: str) -> list[dict]:
+def _parse_iges_occ(file_path: str, original_filename: Optional[str] = None) -> list[dict]:
     """Parse an IGES file using pythonocc-core."""
     _require_occ()
     from OCC.Core.IGESControl import IGESControl_Reader  # type: ignore
@@ -621,7 +655,7 @@ def _parse_iges_occ(file_path: str) -> list[dict]:
     while explorer.More():
         solid = explorer.Current()
         idx += 1
-        parts.append(_solid_to_part_dict(solid, idx, file_path, brepbndlib, brepgprop, "IGES"))
+        parts.append(_solid_to_part_dict(solid, idx, file_path, brepbndlib, brepgprop, "IGES", original_filename))
         explorer.Next()
 
     if not parts:
@@ -633,7 +667,15 @@ def _parse_iges_occ(file_path: str) -> list[dict]:
     return parts
 
 
-def _solid_to_part_dict(shape, idx: int, file_path: str, brepbndlib, brepgprop, file_format: str) -> dict:
+def _solid_to_part_dict(
+    shape,
+    idx: int,
+    file_path: str,
+    brepbndlib,
+    brepgprop,
+    file_format: str,
+    original_filename: Optional[str] = None,
+) -> dict:
     """Convert an OCC TopoDS shape to a raw part dict using real measurements."""
     from OCC.Core.Bnd import Bnd_Box  # type: ignore
     from OCC.Core.GProp import GProp_GProps  # type: ignore
@@ -667,8 +709,9 @@ def _solid_to_part_dict(shape, idx: int, file_path: str, brepbndlib, brepgprop, 
         face_count += 1
         face_exp.Next()
 
-    stem = Path(file_path).stem
-    filename_meta = parse_filename_metadata(file_path)
+    metadata_source = _metadata_source_path(file_path, original_filename)
+    stem = Path(metadata_source).stem
+    filename_meta = parse_filename_metadata(metadata_source)
     part_id = filename_meta.get("part_number") or f"{stem.upper()[:10]}-{idx:03d}"
 
     return {
@@ -696,8 +739,11 @@ def _solid_to_part_dict(shape, idx: int, file_path: str, brepbndlib, brepgprop, 
 # Public API
 # ---------------------------------------------------------------------------
 
-def parse_cad_file(file_path: str) -> list[dict]:
+def parse_cad_file(file_path: str, original_filename: Optional[str] = None) -> list[dict]:
     """Parse a STEP, IGES, or DXF file and return a list of raw part dicts.
+
+    ``original_filename`` should be the upload name when ``file_path`` is a
+    temporary path (e.g. browser uploads saved as /tmp/tmplXXXX.dxf).
 
     Raises a clear error when the file cannot be truly parsed. Never returns
     fabricated/synthetic parts.
@@ -709,11 +755,11 @@ def parse_cad_file(file_path: str) -> list[dict]:
     logger.info("Parsing %s file: %s", file_format, file_path)
 
     if file_format == "DXF":
-        raw_parts = _parse_dxf(file_path)
+        raw_parts = _parse_dxf(file_path, original_filename)
     elif file_format == "STEP":
-        raw_parts = _parse_step_occ(file_path)
+        raw_parts = _parse_step_occ(file_path, original_filename)
     elif file_format == "IGES":
-        raw_parts = _parse_iges_occ(file_path)
+        raw_parts = _parse_iges_occ(file_path, original_filename)
     else:  # pragma: no cover - detect_format guards this
         raise ValueError(f"Unsupported format: {file_format}")
 

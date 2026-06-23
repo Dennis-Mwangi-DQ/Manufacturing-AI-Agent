@@ -134,7 +134,9 @@ def run_pipeline(file_path: str, original_filename: str) -> PipelineResult:
     # ----------------------------------------------------------------
     raw_parts: list[dict] = []
     try:
-        raw_parts = parse_cad_file(file_path)
+        raw_parts = parse_cad_file(file_path, original_filename=original_filename)
+        for raw in raw_parts:
+            raw["source_filename"] = original_filename
         session_log.parts_extracted = len(raw_parts)
         if len(raw_parts) == 200:
             w = "Assembly truncated to 200 parts. Some components were omitted."

@@ -37,7 +37,12 @@ class PartRecord(BaseModel):
     bounding_box: Optional[dict] = None  # {"L": float, "W": float, "H": float}
     parent_assembly: Optional[str] = None
     bom_level: int = 0
-    source_path: Optional[str] = None  # original CAD file this part came from
+    source_path: Optional[str] = None  # path used during parsing (may be temp)
+    source_filename: Optional[str] = None  # original CAD filename from upload
+    engraving_name: Optional[str] = None  # client SS ENGRAVING NAME, e.g. Q1-12A501
+    revision: Optional[int] = None
+    assy_code: Optional[str] = None  # top-level assembly, e.g. 12500
+    sub_assembly_code: Optional[str] = None  # group code, e.g. 12A500
     has_bends: bool = False
     bend_count: int = 0
     bends: list[BendRecord] = Field(default_factory=list)

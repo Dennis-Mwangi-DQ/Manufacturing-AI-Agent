@@ -8,33 +8,45 @@ import pandas as pd
 import pytest
 
 from app.models import PartRecord
-from app.bom_generator import generate_bom
+from app.bom_generator import generate_bom, bom_preview_rows, COLUMNS
 
 
 def make_test_parts():
     return [
         PartRecord(
-            part_id="AV-001",
-            part_name="Hull Panel",
+            part_id="T1B6-12A501",
+            part_name="Fender Panel",
             part_type="SHEET_METAL",
-            quantity=2,
-            material="ARMOX 500T",
+            quantity=1,
+            material="High-hardness armour steel",
             material_code="ARMOX-500T",
+            thickness_mm=4.0,
             mass_kg=24.3,
             bom_level=1,
             has_bends=True,
             bend_count=2,
+            source_filename="B4_Q1-T1B6-12A501-DXF-1.DXF",
+            engraving_name="Q1-12A501",
+            revision=1,
+            assy_code="12500",
+            sub_assembly_code="12A500",
         ),
         PartRecord(
-            part_id="AV-002",
-            part_name="Mounting Bracket",
-            part_type="SOLID",
-            quantity=4,
+            part_id="T1B6-12A502",
+            part_name="Bracket",
+            part_type="SHEET_METAL",
+            quantity=1,
             material=None,
             material_inferred=True,
             low_confidence=True,
+            thickness_mm=4.0,
             mass_kg=1.2,
-            bom_level=2,
+            bom_level=1,
+            source_filename="B4_Q1-T1B6-12A502-DXF-1.DXF",
+            engraving_name="Q1-12A502",
+            revision=1,
+            assy_code="12500",
+            sub_assembly_code="12A500",
         ),
     ]
 
@@ -50,50 +62,46 @@ def test_bom_generates_files():
 def test_bom_row_count():
     parts = make_test_parts()
     with tempfile.TemporaryDirectory() as tmpdir:
-        xlsx_path, csv_path = generate_bom(parts, "test-session-002", tmpdir)
+        _, csv_path = generate_bom(parts, "test-session-002", tmpdir)
         df = pd.read_csv(csv_path)
         assert len(df) == 2
 
 
-def test_bom_item_numbers_sequential():
+def test_bom_client_columns():
     parts = make_test_parts()
     with tempfile.TemporaryDirectory() as tmpdir:
-        xlsx_path, csv_path = generate_bom(parts, "test-session-003", tmpdir)
+        _, csv_path = generate_bom(parts, "test-session-003", tmpdir)
         df = pd.read_csv(csv_path)
-        assert list(df["Item No."]) == [1, 2]
+        assert list(df.columns) == COLUMNS
+
+
+def test_bom_client_fields_populated():
+    parts = make_test_parts()
+    preview = bom_preview_rows(parts)
+    row = preview[0]
+    assert row["SS ENGRAVING NAME"] == "Q1-12A501"
+    assert row["DXF File Name"] == "B4_Q1-T1B6-12A501-DXF-1.DXF"
+    assert row["Material"] == "BALLISTIC STEEL"
+    assert row["Hardness"] == "500"
+    assert row["Thickness (mm)"] == 4.0
+    assert row["ASSY"] == "12500"
+    assert row["SCOPE OF WORK"] == "L+B"
 
 
 def test_bom_flags_low_confidence():
     parts = make_test_parts()
-    with tempfile.TemporaryDirectory() as tmpdir:
-        xlsx_path, csv_path = generate_bom(parts, "test-session-004", tmpdir)
-        df = pd.read_csv(csv_path)
-        flags_col = df["Flags"].fillna("").tolist()
-        # AV-002 is low_confidence + material_inferred
-        av002_flags = flags_col[1]
-        assert "LOW_CONFIDENCE" in av002_flags
-        assert "INFERRED" in av002_flags
+    preview = bom_preview_rows(parts)
+    assert "LOW_CONFIDENCE" in preview[1]["Flags"]
+    assert "INFERRED" in preview[1]["Flags"]
 
 
-def test_bom_inferred_material_label():
-    parts = make_test_parts()
-    with tempfile.TemporaryDirectory() as tmpdir:
-        xlsx_path, csv_path = generate_bom(parts, "test-session-005", tmpdir)
-        df = pd.read_csv(csv_path)
-        # AV-002 has no material but is_inferred — cell should be empty or "(INFERRED)"
-        # Since material is None, cell will be empty
-        mat_val = str(df.loc[df["Part Number"] == "AV-002", "Material"].values[0])
-        # Either empty string or contains INFERRED
-        assert mat_val == "" or "INFERRED" in mat_val or mat_val == "nan"
-
-
-def test_bom_xlsx_exists_and_valid():
+def test_bom_xlsx_has_client_header():
     import openpyxl
     parts = make_test_parts()
     with tempfile.TemporaryDirectory() as tmpdir:
         xlsx_path, _ = generate_bom(parts, "test-session-006", tmpdir)
         wb = openpyxl.load_workbook(xlsx_path)
-        assert "BOM" in wb.sheetnames
         ws = wb["BOM"]
-        # Header row
-        assert ws.cell(row=1, column=1).value == "Item No."
+        assert ws.cell(row=1, column=1).value == "T1B6_12500_DXF_BOM"
+        assert ws.cell(row=2, column=1).value == "SR NO."
+        assert ws.cell(row=3, column=2).value == "12A500"

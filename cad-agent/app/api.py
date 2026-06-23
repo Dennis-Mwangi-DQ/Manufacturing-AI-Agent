@@ -15,6 +15,7 @@ from fastapi.responses import FileResponse, JSONResponse
 
 from app.config import get_settings
 from app.pipeline import run_pipeline
+from app.bom_generator import bom_preview_rows, COLUMNS
 
 logger = logging.getLogger(__name__)
 
@@ -25,6 +26,41 @@ app = FastAPI(
 )
 
 ALLOWED_EXTENSIONS = {".stp", ".step", ".igs", ".iges", ".dxf"}
+
+
+def _pipeline_response(result, extra: dict | None = None) -> dict:
+    """Build JSON payload for upload endpoints, including BOM preview rows."""
+    sl = result.session_log
+    payload = {
+        "session_id": sl.session_id,
+        "status": sl.status,
+        "parts_extracted": sl.parts_extracted,
+        "bom_lines": sl.bom_lines,
+        "dxf_files_generated": sl.dxf_files_generated,
+        "bending_drawings_generated": sl.bending_drawings_generated,
+        "assembly_drawings_generated": sl.assembly_drawings_generated,
+        "processing_time_seconds": sl.processing_time_seconds,
+        "warnings": sl.warnings,
+        "errors": result.errors,
+        "download_url": f"/download/{sl.session_id}",
+        "summary_report": result.summary_report,
+        "bom_preview": bom_preview_rows(result.parts),
+    }
+    if extra:
+        payload.update(extra)
+    return payload
+
+
+def _validate_session_id(session_id: str) -> None:
+    try:
+        uuid.UUID(session_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid session_id format.")
+
+
+def _session_output_dir(session_id: str) -> Path:
+    settings = get_settings()
+    return Path(os.path.abspath(settings.OUTPUT_DIR)) / session_id
 
 
 @app.get("/health")
@@ -90,22 +126,7 @@ async def upload_and_process(file: UploadFile = File(...)):
 
     session_id = result.session_log.session_id
 
-    return JSONResponse(
-        content={
-            "session_id": session_id,
-            "status": result.session_log.status,
-            "parts_extracted": result.session_log.parts_extracted,
-            "bom_lines": result.session_log.bom_lines,
-            "dxf_files_generated": result.session_log.dxf_files_generated,
-            "bending_drawings_generated": result.session_log.bending_drawings_generated,
-            "assembly_drawings_generated": result.session_log.assembly_drawings_generated,
-            "processing_time_seconds": result.session_log.processing_time_seconds,
-            "warnings": result.session_log.warnings,
-            "errors": result.errors,
-            "download_url": f"/download/{session_id}",
-            "summary_report": result.summary_report,
-        }
-    )
+    return JSONResponse(content=_pipeline_response(result))
 
 
 @app.post("/upload_batch")
@@ -172,33 +193,14 @@ async def upload_batch(files: list[UploadFile] = File(...)):
         shutil.rmtree(work_dir, ignore_errors=True)
 
     sl = result.session_log
-    return JSONResponse(content={
-        "session_id": sl.session_id,
-        "status": sl.status,
-        "files_received": saved,
-        "parts_extracted": sl.parts_extracted,
-        "bom_lines": sl.bom_lines,
-        "dxf_files_generated": sl.dxf_files_generated,
-        "bending_drawings_generated": sl.bending_drawings_generated,
-        "assembly_drawings_generated": sl.assembly_drawings_generated,
-        "processing_time_seconds": sl.processing_time_seconds,
-        "warnings": sl.warnings,
-        "errors": result.errors,
-        "download_url": f"/download/{sl.session_id}",
-        "summary_report": result.summary_report,
-    })
+    return JSONResponse(content=_pipeline_response(result, extra={"files_received": saved}))
 
 
 @app.get("/download/{session_id}")
 async def download_outputs(session_id: str):
     """Return the ZIP file for a completed session."""
     settings = get_settings()
-
-    # Sanitise session_id (must look like a UUID)
-    try:
-        uuid.UUID(session_id)
-    except ValueError:
-        raise HTTPException(status_code=400, detail="Invalid session_id format.")
+    _validate_session_id(session_id)
 
     zip_path = os.path.join(os.path.abspath(settings.OUTPUT_DIR), f"{session_id}.zip")
 
@@ -216,15 +218,39 @@ async def download_outputs(session_id: str):
     )
 
 
+@app.get("/bom/{session_id}")
+async def get_bom_preview(session_id: str):
+    """Return BOM rows as JSON for UI preview without downloading the ZIP."""
+    import csv
+
+    _validate_session_id(session_id)
+    session_dir = _session_output_dir(session_id)
+    csv_path = session_dir / "BOM.csv"
+
+    if not csv_path.exists():
+        raise HTTPException(
+            status_code=404,
+            detail=f"BOM not found for session '{session_id}'.",
+        )
+
+    with open(csv_path, newline="", encoding="utf-8") as f:
+        reader = csv.DictReader(f)
+        rows = list(reader)
+
+    return JSONResponse(content={
+        "session_id": session_id,
+        "columns": COLUMNS,
+        "rows": rows,
+        "total_rows": len(rows),
+    })
+
+
 @app.get("/status/{session_id}")
 async def get_status(session_id: str):
     """Return session log JSON for a given session_id."""
     settings = get_settings()
 
-    try:
-        uuid.UUID(session_id)
-    except ValueError:
-        raise HTTPException(status_code=400, detail="Invalid session_id format.")
+    _validate_session_id(session_id)
 
     # Try local log first
     logs_dir = Path(settings.OUTPUT_DIR).parent / "logs"

@@ -25,7 +25,7 @@ from typing import Optional
 
 from app.config import get_settings
 from app.models import PartRecord, PipelineResult, SessionLog
-from app.cad_parser import parse_cad_file
+from app.cad_parser import parse_cad_file, parse_project_assy_from_path
 from app.llm_interpreter import enrich_parts, _enrich_single_part_metadata_only
 from app.bom_generator import generate_bom
 from app.dxf_generator import generate_dxf_flat
@@ -92,10 +92,11 @@ def collect_parts(files: list[Path], root: str) -> tuple[list[dict], list[str]]:
     warnings: list[str] = []
     raw_parts: list[dict] = []
     root_path = Path(root)
+    root_assy = parse_project_assy_from_path(str(root_path))
 
     for f in files:
         try:
-            parsed = parse_cad_file(str(f))
+            parsed = parse_cad_file(str(f), original_filename=f.name)
         except Exception as exc:
             msg = f"Skipped '{f.relative_to(root_path)}': {exc}"
             logger.warning(msg)
@@ -105,6 +106,10 @@ def collect_parts(files: list[Path], root: str) -> tuple[list[dict], list[str]]:
         # Tag each part with the immediate parent folder as its sub-assembly.
         parent = f.parent.name
         for part in parsed:
+            part["source_filename"] = f.name
+            fmeta = part.setdefault("filename_meta", {})
+            if root_assy and not fmeta.get("assy_code"):
+                fmeta["assy_code"] = root_assy
             if parent and parent != root_path.name:
                 part.setdefault("parent_assembly", parent)
                 part["parent_assembly"] = parent

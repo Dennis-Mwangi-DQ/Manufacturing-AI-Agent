@@ -85,6 +85,16 @@ def test_parse_filename_metadata_basic():
     assert meta["thickness_mm"] == 4.0
     assert meta["quantity"] == 1
     assert meta["part_number"] == "T1B6-12C501"
+    assert meta["engraving_name"] == "Q1-12C501"
+    assert meta["revision"] == 1
+    assert meta["sub_assembly_code"] == "12C500"
+    assert meta["dxf_file_name"] == "M4_Q1-T1B6-12C501-DXF-1.DXF"
+
+
+def test_parse_filename_metadata_assy_from_project_path():
+    path = "/sample/T1B6-12500-DXF-1/12C500/M4_Q1-T1B6-12C501-DXF-1.DXF"
+    meta = parse_filename_metadata(path)
+    assert meta["assy_code"] == "12500"
 
 
 def test_parse_filename_metadata_decimal_thickness():
@@ -135,3 +145,20 @@ def test_real_dxf_enrichment_is_honest():
     # Material is either unknown or an explicitly-inferred real grade.
     if rec.material_code is not None:
         assert rec.material_code in {m["code"] for m in materials}
+
+
+@pytest.mark.skipif(not SAMPLE_DXF.exists(), reason="sample DXF not available")
+def test_parse_cad_file_uses_original_filename_on_temp_path(tmp_path):
+    """Uploads are saved as temp names; metadata must come from original_filename."""
+    import shutil
+
+    tmp_dxf = tmp_path / "tmpljmz7h67.dxf"
+    shutil.copy(SAMPLE_DXF, tmp_dxf)
+    part = parse_cad_file(
+        str(tmp_dxf),
+        original_filename="M4_Q1-T1B6-12C501-DXF-1.DXF",
+    )[0]
+    assert part["part_id"] == "T1B6-12C501"
+    assert part["thickness_mm"] == 4.0
+    assert part["thickness_source"] == "filename"
+    assert part["quantity"] == 1

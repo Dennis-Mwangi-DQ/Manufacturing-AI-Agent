@@ -55,43 +55,37 @@ DEMO_RESULT = {
 }
 
 DEMO_BOM = [
-    {"Item No.": 1, "Part Number": "AV-001", "Part Name/Description": "Hull Front Panel",
-     "Quantity": 1, "UoM": "EA", "Material": "ARMOX-500T", "Mass (kg)": 47.3,
-     "Parent Assembly": "", "Level": 0, "Notes": "", "Flags": "BENDS:2"},
-    {"Item No.": 2, "Part Number": "AV-002", "Part Name/Description": "Hull Rear Panel",
-     "Quantity": 1, "UoM": "EA", "Material": "ARMOX-500T", "Mass (kg)": 43.1,
-     "Parent Assembly": "", "Level": 0, "Notes": "", "Flags": "BENDS:2"},
-    {"Item No.": 3, "Part Number": "AV-003", "Part Name/Description": "Hull Side Panel L",
-     "Quantity": 1, "UoM": "EA", "Material": "ARMOX-500T (INFERRED)", "Mass (kg)": 88.6,
-     "Parent Assembly": "AV-001", "Level": 1, "Notes": "Material inferred", "Flags": "INFERRED;BENDS:3"},
-    {"Item No.": 4, "Part Number": "AV-004", "Part Name/Description": "Hull Side Panel R",
-     "Quantity": 1, "UoM": "EA", "Material": "ARMOX-500T (INFERRED)", "Mass (kg)": 88.6,
-     "Parent Assembly": "AV-001", "Level": 1, "Notes": "Material inferred", "Flags": "INFERRED;BENDS:3"},
-    {"Item No.": 5, "Part Number": "AV-005", "Part Name/Description": "Floor Plate",
-     "Quantity": 1, "UoM": "EA", "Material": "ARMOX-500T", "Mass (kg)": 541.2,
-     "Parent Assembly": "", "Level": 0, "Notes": "", "Flags": "BENDS:1"},
-    {"Item No.": 6, "Part Number": "AV-006", "Part Name/Description": "Roof Panel",
-     "Quantity": 1, "UoM": "EA", "Material": "AL-5083", "Mass (kg)": 136.7,
-     "Parent Assembly": "", "Level": 0, "Notes": "", "Flags": "BENDS:2"},
-    {"Item No.": 7, "Part Number": "AV-007", "Part Name/Description": "Door Panel L",
-     "Quantity": 1, "UoM": "EA", "Material": "ARMOX-370T", "Mass (kg)": 74.4,
-     "Parent Assembly": "", "Level": 0, "Notes": "LOW CONFIDENCE", "Flags": "LOW_CONFIDENCE;BENDS:2"},
-    {"Item No.": 8, "Part Number": "AV-008", "Part Name/Description": "Door Panel R",
-     "Quantity": 1, "UoM": "EA", "Material": "ARMOX-370T", "Mass (kg)": 74.4,
-     "Parent Assembly": "", "Level": 0, "Notes": "LOW CONFIDENCE", "Flags": "LOW_CONFIDENCE;BENDS:2"},
-    {"Item No.": 9, "Part Number": "AV-009", "Part Name/Description": "Engine Mounting Bracket",
-     "Quantity": 4, "UoM": "EA", "Material": "MILD-S275", "Mass (kg)": 3.4,
-     "Parent Assembly": "AV-001", "Level": 2, "Notes": "", "Flags": ""},
-    {"Item No.": 10, "Part Number": "AV-010", "Part Name/Description": "Suspension Arm",
-     "Quantity": 4, "UoM": "EA", "Material": "MILD-S275", "Mass (kg)": 8.7,
-     "Parent Assembly": "AV-001", "Level": 2, "Notes": "", "Flags": ""},
-    {"Item No.": 11, "Part Number": "AV-011", "Part Name/Description": "Hatch Assembly",
-     "Quantity": 2, "UoM": "EA", "Material": "ARMOX-370T", "Mass (kg)": 28.9,
-     "Parent Assembly": "", "Level": 0, "Notes": "", "Flags": "BENDS:1"},
-    {"Item No.": 12, "Part Number": "AV-012", "Part Name/Description": "Spall Liner",
-     "Quantity": 6, "UoM": "EA", "Material": "UHMWPE", "Mass (kg)": 4.2,
-     "Parent Assembly": "", "Level": 1, "Notes": "", "Flags": ""},
+    {"SR NO.": 1, "IMAGE": "", "SS ENGRAVING NAME": "Q1-AV001", "Revision": 1,
+     "DXF File Name": "B4_Q1-AV001-DXF-1.DXF", "Material": "BALLISTIC STEEL", "Hardness": "500",
+     "Thickness (mm)": 8, "Quantity": 1, "ASSY": "12500", "SCOPE OF WORK": "L+B",
+     "Notes": "", "Flags": "BENDS:2"},
+    {"SR NO.": 2, "IMAGE": "", "SS ENGRAVING NAME": "Q1-AV002", "Revision": 1,
+     "DXF File Name": "B4_Q1-AV002-DXF-1.DXF", "Material": "BALLISTIC STEEL (INFERRED)", "Hardness": "500",
+     "Thickness (mm)": 6, "Quantity": 1, "ASSY": "12500", "SCOPE OF WORK": "L",
+     "Notes": "LOW CONFIDENCE", "Flags": "LOW_CONFIDENCE;INFERRED"},
 ]
+
+
+def _load_bom_preview(result: dict, is_demo: bool) -> pd.DataFrame | None:
+    """Build a BOM dataframe from the API response or /bom endpoint."""
+    if is_demo:
+        return pd.DataFrame(DEMO_BOM)
+
+    rows = result.get("bom_preview")
+    if rows:
+        return pd.DataFrame(rows)
+
+    session_id = result.get("session_id")
+    if not session_id:
+        return None
+
+    try:
+        response = requests.get(f"{API_BASE_URL}/bom/{session_id}", timeout=15)
+        if response.status_code == 200:
+            return pd.DataFrame(response.json().get("rows", []))
+    except Exception:
+        pass
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -251,7 +245,6 @@ if process_btn:
         result = DEMO_RESULT
         st.session_state["result"] = result
         st.session_state["demo"] = True
-        st.session_state["bom_df"] = pd.DataFrame(DEMO_BOM)
     elif upload_mode == "Folder / multiple files":
         if not uploaded_files:
             st.error("Please select the folder's files (or a .zip) first.")
@@ -267,7 +260,6 @@ if process_btn:
                     if response.status_code == 200:
                         st.session_state["result"] = response.json()
                         st.session_state["demo"] = False
-                        st.session_state.pop("bom_df", None)
                     else:
                         try:
                             detail = response.json().get("detail", response.text)
@@ -298,7 +290,6 @@ if process_btn:
                         result = response.json()
                         st.session_state["result"] = result
                         st.session_state["demo"] = False
-                        st.session_state.pop("bom_df", None)
                     else:
                         try:
                             detail = response.json().get("detail", response.text)
@@ -361,6 +352,22 @@ if "result" in st.session_state:
 
     st.divider()
 
+    # BOM Preview
+    bom_df = _load_bom_preview(result, is_demo)
+    if bom_df is not None and not bom_df.empty:
+        st.subheader("BOM Preview")
+        st.caption(f"{len(bom_df)} line(s) — same data as BOM.xlsx / BOM.csv in the download package.")
+        st.dataframe(
+            bom_df,
+            use_container_width=True,
+            hide_index=True,
+            height=min(700, 38 + 35 * len(bom_df)),
+        )
+    elif not is_demo and result.get("bom_lines", 0) == 0:
+        st.info("No BOM lines were generated for this run.")
+
+    st.divider()
+
     # Download button
     col_dl, col_sr = st.columns([1, 2])
     with col_dl:
@@ -390,28 +397,6 @@ if "result" in st.session_state:
         if summary:
             with st.expander("Summary Report", expanded=False):
                 st.markdown(summary)
-
-    st.divider()
-
-    # BOM Preview
-    with st.expander("BOM Preview (first 20 rows)", expanded=False):
-        bom_df = st.session_state.get("bom_df")
-
-        if bom_df is None and not is_demo:
-            # Try to fetch BOM from session files (best effort)
-            st.info("BOM preview is available in the downloaded ZIP (BOM.csv).")
-        elif bom_df is not None:
-            st.dataframe(
-                bom_df.head(20),
-                use_container_width=True,
-                hide_index=True,
-            )
-        elif is_demo:
-            st.dataframe(
-                pd.DataFrame(DEMO_BOM).head(20),
-                use_container_width=True,
-                hide_index=True,
-            )
 
 # ---------------------------------------------------------------------------
 # Footer

@@ -88,6 +88,7 @@ python -m app.batch "/path/to/folder" --no-llm   # metadata-only, no network
 | Method | Endpoint | Description |
 |--------|----------|-------------|
 | POST | `/upload` | Upload CAD file, run pipeline, returns `session_id` |
+| GET | `/bom/{session_id}` | BOM preview as JSON (no download) |
 | GET | `/download/{session_id}` | Download output ZIP |
 | GET | `/status/{session_id}` | Get session log JSON |
 | GET | `/health` | Health check |

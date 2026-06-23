@@ -116,6 +116,7 @@ Respond with JSON only:
 # exports. Ambiguous letters are intentionally omitted (no guessing).
 _FILENAME_LETTER_TO_MATERIAL = {
     "M": "MILD-S275",
+    "B": "ARMOX-500T",
 }
 
 
@@ -458,6 +459,8 @@ def _build_part_record(
     if llm_data and llm_data.get("part_name"):
         part_name = llm_data["part_name"]
 
+    fmeta = raw.get("filename_meta") or {}
+
     return PartRecord(
         part_id=raw.get("part_id", "UNKNOWN"),
         part_name=part_name,
@@ -474,6 +477,11 @@ def _build_part_record(
         parent_assembly=raw.get("parent_assembly"),
         bom_level=raw.get("bom_level", 0),
         source_path=raw.get("source_path"),
+        source_filename=raw.get("source_filename") or fmeta.get("dxf_file_name"),
+        engraving_name=fmeta.get("engraving_name"),
+        revision=fmeta.get("revision"),
+        assy_code=fmeta.get("assy_code"),
+        sub_assembly_code=fmeta.get("sub_assembly_code"),
         has_bends=len(bends) > 0,
         bend_count=len(bends),
         bends=bends,
