@@ -1,6 +1,6 @@
 # Engineering CAD AI Agent
 
-A deep prototype for armoured vehicle manufacturing. Accepts a CAD file (STEP, IGES, or DXF), runs an 8-step AI pipeline powered by Claude (Anthropic), and produces a complete manufacturing package: Bill of Materials (Excel + CSV), DXF flat drawings per sheet metal part, bending drawings (DXF + PDF), an assembly drawing (DXF + PDF), and a ZIP containing all outputs with a summary report.
+A deep prototype for armoured vehicle manufacturing. Accepts a CAD file (STEP, IGES, or DXF), runs an 8-step AI pipeline powered by DeepSeek, and produces a complete manufacturing package: Bill of Materials (Excel + CSV), DXF flat drawings per sheet metal part, bending drawings (DXF + PDF), an assembly drawing (DXF + PDF), and a ZIP containing all outputs with a summary report.
 
 ---
 
@@ -33,8 +33,12 @@ pip install -r requirements.txt
 
 2. Edit `.env`:
    ```
-   ANTHROPIC_API_KEY=sk-ant-...        # Required for LLM enrichment
-   OPENAI_API_KEY=                      # Optional fallback
+   DEEPSEEK_API_KEY=sk-...              # Required for LLM enrichment
+   DEEPSEEK_BASE_URL=https://api.deepseek.com/v1
+   DEEPSEEK_MODEL=deepseek-chat
+   TAVILY_API_KEY=tvly-...              # Optional — web search for refinement pass
+   ENABLE_WEB_SEARCH=true               # Set false to skip Tavily during refinement
+   LLM_CONFIDENCE_THRESHOLD=0.6         # Below this triggers second LLM pass
    SUPABASE_URL=https://...             # Optional — session logging
    SUPABASE_KEY=...                     # Optional
    SESSION_SECRET=<random hex>
@@ -156,7 +160,8 @@ app/
   config.py            — pydantic-settings env loader
   models.py            — Pydantic v2 data models
   cad_parser.py        — STEP/IGES/DXF geometry extraction
-  llm_interpreter.py   — LangChain + Claude part enrichment
+  llm_interpreter.py   — LangChain + DeepSeek two-pass part enrichment
+  web_search.py        — Tavily web search for low-confidence refinement
   bom_generator.py     — Excel + CSV BOM output
   dxf_generator.py     — DXF flat drawings (ezdxf)
   bending_calculator.py — Bend math + bending drawings (DXF + PDF)

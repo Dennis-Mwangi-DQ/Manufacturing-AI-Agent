@@ -2,6 +2,11 @@
 LLM enrichment module — uses DeepSeek (via the OpenAI-compatible API) to enrich
 raw part metadata.
 
+Two-pass enrichment:
+  1. Standard pass — classify part and suggest material from CAD metadata.
+  2. Refinement pass — triggered when confidence < LLM_CONFIDENCE_THRESHOLD.
+     Optionally includes Tavily web search results for material/part context.
+
 Honesty rules enforced here:
   - Material is only assigned when the model is reasonably confident or a
     filename code provides a hint; otherwise it stays None and is flagged.
@@ -17,6 +22,11 @@ from typing import Optional
 from app.config import get_settings
 from app.models import BendRecord, PartRecord
 from app.cad_parser import detect_sheet_metal, extract_bends_from_geometry
+from app.web_search import (
+    build_material_search_query,
+    format_search_results,
+    search_engineering_context,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -38,6 +48,20 @@ SYSTEM_PROMPT = (
     "Respond ONLY with valid JSON matching the schema."
 )
 
+RETRY_SYSTEM_PROMPT = (
+    "You are a senior manufacturing engineer reviewing a low-confidence CAD part "
+    "classification. Your first-pass analysis was uncertain. Re-evaluate using "
+    "the additional context provided (including any web search excerpts).\n\n"
+    "Rules you MUST follow:\n"
+    "- Choose a material_code ONLY from the provided materials list when evidence "
+    "supports it. If still uncertain, return material_code = null.\n"
+    "- Raise confidence ONLY when you have concrete evidence (filename code, "
+    "geometry type, thickness, or a credible web source).\n"
+    "- Do not invent bends or dimensions.\n"
+    "- If web search results are irrelevant, ignore them and say so in notes.\n"
+    "Respond ONLY with valid JSON matching the schema."
+)
+
 USER_PROMPT_TEMPLATE = """Part metadata (objective, from the CAD file):
 {part_metadata_json}
 
@@ -55,6 +79,35 @@ Respond with JSON only:
   "material": "material name, or null",
   "material_inferred": true,
   "notes": "concise manufacturing notes, or null",
+  "confidence": 0.0
+}}"""
+
+RETRY_USER_PROMPT_TEMPLATE = """This part received a LOW-CONFIDENCE first-pass classification.
+Re-evaluate carefully using all evidence below.
+
+Part metadata (objective, from the CAD file):
+{part_metadata_json}
+
+Filename-derived hints (may be null):
+{filename_hints_json}
+
+First-pass LLM result (low confidence — verify or correct):
+{first_pass_json}
+
+Web search context (may be empty):
+{web_search_context}
+
+Available materials (code: name):
+{materials_list}
+
+Respond with JSON only:
+{{
+  "part_name": "human-readable name",
+  "part_type": "SHEET_METAL|SOLID|ASSEMBLY|UNKNOWN",
+  "material_code": "one of the material codes, or null if unsure",
+  "material": "material name, or null",
+  "material_inferred": true,
+  "notes": "concise manufacturing notes explaining your decision, or null",
   "confidence": 0.0
 }}"""
 
@@ -135,6 +188,40 @@ def _resolve_material(
     return None, None, False, None
 
 
+def _confidence_from_llm_data(llm_data: Optional[dict]) -> float:
+    if not llm_data:
+        return 0.0
+    try:
+        return float(llm_data.get("confidence", 0.0))
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _should_run_second_pass(llm_data: dict, threshold: float) -> bool:
+    return _confidence_from_llm_data(llm_data) < threshold
+
+
+def _pick_better_llm_result(first: dict, second: dict) -> tuple[dict, bool]:
+    """
+    Choose the better of two LLM responses.
+
+    Prefers higher confidence; on a tie, prefers the response that resolved
+  a material_code present in the first result's uncertainty.
+    """
+    first_conf = _confidence_from_llm_data(first)
+    second_conf = _confidence_from_llm_data(second)
+
+    if second_conf > first_conf:
+        return second, True
+    if second_conf < first_conf:
+        return first, False
+
+    # Tie-break: prefer second pass if it found a material the first pass missed.
+    if not first.get("material_code") and second.get("material_code"):
+        return second, True
+    return first, False
+
+
 # ---------------------------------------------------------------------------
 # Bend record construction (geometry-driven, never padded)
 # ---------------------------------------------------------------------------
@@ -179,7 +266,7 @@ def _build_bend_records(
 # Prompt building / response parsing
 # ---------------------------------------------------------------------------
 
-def build_llm_prompt(part: dict, materials_table: list[dict]) -> str:
+def _part_prompt_context(part: dict) -> tuple[str, str]:
     safe_part = {
         k: v for k, v in part.items()
         if k not in ("bend_lines", "circles", "filename_meta")
@@ -187,10 +274,32 @@ def build_llm_prompt(part: dict, materials_table: list[dict]) -> str:
     part_json = json.dumps(safe_part, indent=2, default=str)
     hints = part.get("filename_meta") or {}
     hints_json = json.dumps(hints, indent=2, default=str)
+    return part_json, hints_json
+
+
+def build_llm_prompt(part: dict, materials_table: list[dict]) -> str:
+    part_json, hints_json = _part_prompt_context(part)
     mat_list = "\n".join(f"{m['code']}: {m['name']}" for m in materials_table)
     return USER_PROMPT_TEMPLATE.format(
         part_metadata_json=part_json,
         filename_hints_json=hints_json,
+        materials_list=mat_list,
+    )
+
+
+def build_retry_llm_prompt(
+    part: dict,
+    materials_table: list[dict],
+    first_pass: dict,
+    search_results: list[dict],
+) -> str:
+    part_json, hints_json = _part_prompt_context(part)
+    mat_list = "\n".join(f"{m['code']}: {m['name']}" for m in materials_table)
+    return RETRY_USER_PROMPT_TEMPLATE.format(
+        part_metadata_json=part_json,
+        filename_hints_json=hints_json,
+        first_pass_json=json.dumps(first_pass, indent=2, default=str),
+        web_search_context=format_search_results(search_results),
         materials_list=mat_list,
     )
 
@@ -205,6 +314,84 @@ def _parse_llm_response(text: str) -> Optional[dict]:
         return json.loads(text[start:end])
     except json.JSONDecodeError:
         return None
+
+
+def _invoke_llm_for_json(llm, messages: list, part_id: str, label: str) -> Optional[dict]:
+    """Call the LLM up to 3 times and return parsed JSON, or None."""
+    for attempt in range(3):
+        try:
+            response = llm.invoke(messages)
+            llm_data = _parse_llm_response(response.content)
+            if llm_data:
+                return llm_data
+            logger.warning(
+                "LLM returned unparseable JSON for part %s (%s, attempt %d)",
+                part_id, label, attempt + 1,
+            )
+        except Exception as exc:
+            logger.warning(
+                "LLM call failed for part %s (%s, attempt %d): %s",
+                part_id, label, attempt + 1, exc,
+            )
+    return None
+
+
+def _run_refinement_pass(
+    raw: dict,
+    materials_table: list[dict],
+    settings,
+    llm,
+    first_pass: dict,
+) -> tuple[Optional[dict], bool, bool]:
+    """
+    Second LLM pass with optional web search.
+
+    Returns (llm_data, used_second_pass, used_web_search).
+    """
+    from langchain_core.messages import HumanMessage, SystemMessage  # type: ignore
+
+    search_results: list[dict] = []
+    used_web_search = False
+
+    if settings.ENABLE_WEB_SEARCH and settings.TAVILY_API_KEY:
+        query = build_material_search_query(raw, first_pass)
+        search_results = search_engineering_context(
+            query,
+            settings.TAVILY_API_KEY,
+            max_results=3,
+        )
+        used_web_search = bool(search_results)
+        if search_results:
+            logger.info(
+                "Web search returned %d results for part %s",
+                len(search_results),
+                raw.get("part_id"),
+            )
+
+    retry_prompt = build_retry_llm_prompt(raw, materials_table, first_pass, search_results)
+    messages = [
+        SystemMessage(content=RETRY_SYSTEM_PROMPT),
+        HumanMessage(content=retry_prompt),
+    ]
+    retry_data = _invoke_llm_for_json(
+        llm,
+        messages,
+        str(raw.get("part_id", "UNKNOWN")),
+        "refinement pass",
+    )
+    if retry_data is None:
+        return first_pass, False, used_web_search
+
+    chosen, second_was_better = _pick_better_llm_result(first_pass, retry_data)
+    if second_was_better or chosen is retry_data:
+        refinement_note = "Refinement pass applied"
+        if used_web_search:
+            refinement_note += " (web-assisted)"
+        existing = chosen.get("notes")
+        chosen["notes"] = f"{existing} | {refinement_note}" if existing else refinement_note
+        return chosen, True, used_web_search
+
+    return first_pass, True, used_web_search
 
 
 # ---------------------------------------------------------------------------
@@ -244,12 +431,14 @@ def _build_part_record(
     k_factor = _material_k_factor(material_code, materials_table, settings.DEFAULT_K_FACTOR)
     bends = _build_bend_records(raw.get("part_id", "P-001"), raw_bends, thickness, k_factor)
 
+    threshold = settings.LLM_CONFIDENCE_THRESHOLD
+
     # Confidence handling.
     if llm_data is not None:
-        confidence = float(llm_data.get("confidence", 0.5))
+        confidence = _confidence_from_llm_data(llm_data)
     else:
         confidence = None
-    low_confidence = (confidence is None) or (confidence < 0.6)
+    low_confidence = (confidence is None) or (confidence < threshold)
 
     # Notes: combine geometry notes, material note, and LLM notes.
     note_parts = []
@@ -333,37 +522,31 @@ def enrich_parts(raw_parts: list[dict], materials_table: list[dict]) -> list[Par
 
 
 def _enrich_single_part_llm(raw: dict, materials_table: list[dict], settings, llm) -> PartRecord:
-    """Call the LLM for a single part. Retries before falling back to metadata-only."""
+    """Call DeepSeek for a single part, with a refinement pass when confidence is low."""
     from langchain_core.messages import HumanMessage, SystemMessage  # type: ignore
 
+    part_id = str(raw.get("part_id", "UNKNOWN"))
     user_prompt = build_llm_prompt(raw, materials_table)
     messages = [SystemMessage(content=SYSTEM_PROMPT), HumanMessage(content=user_prompt)]
 
-    llm_data: Optional[dict] = None
-    for attempt in range(3):
-        try:
-            response = llm.invoke(messages)
-            llm_data = _parse_llm_response(response.content)
-            if llm_data:
-                break
-            logger.warning(
-                "LLM returned unparseable JSON for part %s (attempt %d)",
-                raw.get("part_id"), attempt + 1,
-            )
-        except Exception as exc:
-            logger.warning(
-                "LLM call failed for part %s (attempt %d): %s",
-                raw.get("part_id"), attempt + 1, exc,
-            )
+    llm_data = _invoke_llm_for_json(llm, messages, part_id, "first pass")
 
     if llm_data is None:
         logger.warning(
             "All LLM retries exhausted for part %s — using metadata-only result.",
-            raw.get("part_id"),
+            part_id,
         )
         part = _build_part_record(raw, materials_table, settings, llm_data=None)
         part.notes = (part.notes + " | " if part.notes else "") + "LLM enrichment unavailable"
         part.low_confidence = True
         return part
+
+    if _should_run_second_pass(llm_data, settings.LLM_CONFIDENCE_THRESHOLD):
+        logger.info(
+            "Low confidence (%.2f) for part %s — running refinement pass",
+            _confidence_from_llm_data(llm_data),
+            part_id,
+        )
+        llm_data, _, _ = _run_refinement_pass(raw, materials_table, settings, llm, llm_data)
 
     return _build_part_record(raw, materials_table, settings, llm_data)

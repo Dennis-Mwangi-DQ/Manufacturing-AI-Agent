@@ -49,7 +49,7 @@ cad-agent/
 - Python 3.10+
 - pythonocc-core via conda (`conda install -c conda-forge pythonocc-core`)
 - All other deps via pip from requirements.txt
-- LLM: Claude Sonnet (claude-sonnet-4-6) primary, GPT-4o fallback
+- LLM: DeepSeek (deepseek-chat) via OpenAI-compatible API; two-pass enrichment with optional Tavily web search
 - LLM responses must be JSON (structured output)
 
 ## Coding standards

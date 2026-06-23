@@ -120,9 +120,18 @@ with st.sidebar:
     if api_key_set:
         st.success("DeepSeek API: Connected", icon="✅")
         st.caption(f"Model: `{_settings.DEEPSEEK_MODEL}`")
+        st.caption(f"Refinement threshold: `{_settings.LLM_CONFIDENCE_THRESHOLD}`")
     else:
         st.error("DeepSeek API: Not configured", icon="❌")
         st.caption("Set DEEPSEEK_API_KEY in your .env file to enable LLM enrichment.")
+
+    web_search_ready = bool(_settings.TAVILY_API_KEY) and _settings.ENABLE_WEB_SEARCH
+    if web_search_ready:
+        st.success("Web search (Tavily): Enabled", icon="✅")
+    elif _settings.ENABLE_WEB_SEARCH:
+        st.warning("Web search: Disabled (no TAVILY_API_KEY)", icon="⚠️")
+    else:
+        st.info("Web search: Off (ENABLE_WEB_SEARCH=false)", icon="ℹ️")
 
     st.divider()
 
@@ -219,7 +228,7 @@ with col_info:
 1. File validation
 2. Session setup
 3. CAD geometry extraction
-4. LLM part enrichment (DeepSeek)
+4. LLM part enrichment (DeepSeek — two-pass with optional web search)
 5. BOM generation
 6. DXF flat drawings
 7. Bending drawings

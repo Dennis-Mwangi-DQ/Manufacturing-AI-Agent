@@ -28,7 +28,15 @@ class Settings(BaseSettings):
         description="DeepSeek OpenAI-compatible API base URL",
     )
     DEEPSEEK_MODEL: str = Field(default="deepseek-chat", description="DeepSeek model name")
-    OPENAI_API_KEY: Optional[str] = Field(default=None, description="OpenAI API key (optional fallback)")
+    TAVILY_API_KEY: str = Field(default="", description="Tavily API key for web search during LLM refinement")
+    ENABLE_WEB_SEARCH: bool = Field(
+        default=True,
+        description="Run Tavily web search during the second LLM pass when API key is set",
+    )
+    LLM_CONFIDENCE_THRESHOLD: float = Field(
+        default=0.6,
+        description="Below this confidence score triggers a second LLM pass",
+    )
     SUPABASE_URL: Optional[str] = Field(default=None, description="Supabase project URL")
     SUPABASE_KEY: Optional[str] = Field(default=None, description="Supabase anon key")
     SESSION_SECRET: str = Field(default="change_me", description="Session secret")
