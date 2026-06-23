@@ -108,6 +108,87 @@ async def upload_and_process(file: UploadFile = File(...)):
     )
 
 
+@app.post("/upload_batch")
+async def upload_batch(files: list[UploadFile] = File(...)):
+    """Accept multiple CAD files (or a ZIP of a folder) and build ONE package.
+
+    Saves the uploads into a temp directory (extracting any ZIPs, preserving
+    sub-folders as sub-assemblies) and runs the consolidated batch pipeline.
+    """
+    import zipfile
+    from app.batch import run_batch, SUPPORTED_EXTENSIONS
+
+    if not files:
+        raise HTTPException(status_code=422, detail="No files were uploaded.")
+
+    work_dir = tempfile.mkdtemp(prefix="cadbatch_")
+    saved = 0
+    label = "batch"
+    try:
+        for up in files:
+            name = os.path.basename(up.filename or "upload")
+            ext = Path(name).suffix.lower()
+            content = await up.read()
+
+            if ext == ".zip":
+                label = Path(name).stem
+                with tempfile.NamedTemporaryFile(delete=False, suffix=".zip") as zt:
+                    zt.write(content)
+                    zip_tmp = zt.name
+                try:
+                    with zipfile.ZipFile(zip_tmp) as zf:
+                        for member in zf.namelist():
+                            # Skip unsafe paths and unsupported types.
+                            if member.endswith("/") or os.path.isabs(member) or ".." in member:
+                                continue
+                            if Path(member).suffix.lower() in SUPPORTED_EXTENSIONS:
+                                zf.extract(member, work_dir)
+                                saved += 1
+                finally:
+                    os.unlink(zip_tmp)
+            elif ext in SUPPORTED_EXTENSIONS:
+                dest = os.path.join(work_dir, name)
+                with open(dest, "wb") as f_out:
+                    f_out.write(content)
+                saved += 1
+
+        if saved == 0:
+            raise HTTPException(
+                status_code=422,
+                detail=f"No supported CAD files found. Accepted: {', '.join(sorted(SUPPORTED_EXTENSIONS))} (or a .zip of them).",
+            )
+
+        if len(files) == 1 and label == "batch":
+            label = Path(os.path.basename(files[0].filename or "batch")).stem
+
+        result = run_batch(work_dir, label=label)
+
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.exception("Batch error: %s", exc)
+        raise HTTPException(status_code=500, detail=f"Batch error: {exc}") from exc
+    finally:
+        shutil.rmtree(work_dir, ignore_errors=True)
+
+    sl = result.session_log
+    return JSONResponse(content={
+        "session_id": sl.session_id,
+        "status": sl.status,
+        "files_received": saved,
+        "parts_extracted": sl.parts_extracted,
+        "bom_lines": sl.bom_lines,
+        "dxf_files_generated": sl.dxf_files_generated,
+        "bending_drawings_generated": sl.bending_drawings_generated,
+        "assembly_drawings_generated": sl.assembly_drawings_generated,
+        "processing_time_seconds": sl.processing_time_seconds,
+        "warnings": sl.warnings,
+        "errors": result.errors,
+        "download_url": f"/download/{sl.session_id}",
+        "summary_report": result.summary_report,
+    })
+
+
 @app.get("/download/{session_id}")
 async def download_outputs(session_id: str):
     """Return the ZIP file for a completed session."""

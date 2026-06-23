@@ -1,3 +1,8 @@
+# NOTE: STEP/IGES parsing also requires 'pythonocc-core', which is NOT
+# pip-installable. Install it separately via conda:
+#   conda install -c conda-forge pythonocc-core
+# Without it, STEP/IGES uploads fail with a clear error (no fabricated data).
+# DXF flat patterns work with the pip dependencies below alone.
 langchain>=0.2.0
 langchain-openai>=0.1.0
 openai>=1.30.0

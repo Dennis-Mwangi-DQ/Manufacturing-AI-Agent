@@ -13,7 +13,9 @@ A deep prototype for armoured vehicle manufacturing. Accepts a CAD file (STEP, I
 ```bash
 conda install -c conda-forge pythonocc-core
 ```
-This is a conda-only package. Without it the agent runs in **DXF-only + fallback mode** — STEP and IGES files produce synthetic demo geometry instead of real extracted geometry. DXF files work fully without this dependency.
+This is a conda-only package and is **required** for STEP/IGES files. The agent never fabricates geometry: if `pythonocc-core` is not installed, uploading a STEP or IGES file raises a clear error instructing you to install it (or export to DXF). DXF flat patterns are parsed fully with `ezdxf` and need no extra dependency.
+
+If you cannot use conda directly, build the Docker images (see `docker-compose.yml`), which provide a `pythonocc-core`-capable environment for the API service.
 
 ### Python dependencies
 ```bash
@@ -59,6 +61,21 @@ streamlit run app/main.py
 ```
 
 Then open [http://localhost:8501](http://localhost:8501) in your browser.
+
+### Batch a whole folder (CLI)
+
+To process every CAD file under a directory (recursively) and build ONE
+consolidated package (BOM + DXF flats + bending drawings + assembly + ZIP):
+
+```bash
+python -m app.batch "/path/to/folder"
+python -m app.batch "/path/to/folder" --output ./outputs --name FENDER_VLH
+python -m app.batch "/path/to/folder" --no-llm   # metadata-only, no network
+```
+
+- One file == one part; duplicate part numbers are merged and their quantities summed.
+- Each immediate sub-folder is recorded as the part's sub-assembly.
+- Unparseable files are reported as warnings and skipped (never fabricated).
 
 ---
 
@@ -160,7 +177,9 @@ tests/
 
 ## Known Limitations (Prototype)
 
-- **pythonocc-core requires conda** — STEP/IGES geometry extraction needs the conda-forge package. Without it, the pipeline runs with synthetic fallback data suitable for UI and workflow demonstration.
+- **pythonocc-core requires conda** — STEP/IGES geometry extraction needs the conda-forge package. Without it, STEP/IGES uploads fail with a clear error rather than producing fabricated data. DXF flat patterns are unaffected.
+- **Native SolidWorks files unsupported** — `.SLDPRT` / `.SLDASM` / `.SLDDRW` cannot be parsed directly; export to STEP or DXF first. The agent rejects them with an explanatory message.
+- **DXF thickness is filename-derived** — A 2D flat pattern carries no thickness, so thickness is read from the export filename code (e.g. `M4` → 4 mm) and flagged for verification. Mass is only computed when both a real profile area and a thickness/material are known; otherwise it is left blank.
 - **No springback compensation** — Bending drawings show theoretical bend geometry only. Real tooling requires springback-adjusted angles.
 - **2D assembly drawings only** — The assembly drawing is a bounding-box projection, not a true 3D isometric view.
 - **Max 200 parts per assembly** — Larger assemblies are truncated with a warning.

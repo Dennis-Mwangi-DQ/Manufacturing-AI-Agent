@@ -106,26 +106,29 @@ def _draw_flat_profile_with_bends(
             dxfattribs={"layer": "ANNOTATIONS", "height": 5.0},
         ).set_placement((line_x, ann_y_base), align=TextEntityAlignment.CENTER)
 
-        # Angle
+        # Angle (unknown values shown as '?')
+        angle_str = f"{br.angle_deg:.1f}°" if br.angle_deg is not None else "?°"
         msp.add_text(
-            f"{br.angle_deg:.1f}°",
+            angle_str,
             dxfattribs={"layer": "ANNOTATIONS", "height": 4.0},
         ).set_placement((line_x, ann_y_base + row_gap), align=TextEntityAlignment.CENTER)
 
         # Radius
+        radius_str = f"R{br.radius_mm:.1f}" if br.radius_mm is not None else "R?"
         msp.add_text(
-            f"R{br.radius_mm:.1f}",
+            radius_str,
             dxfattribs={"layer": "ANNOTATIONS", "height": 4.0},
         ).set_placement((line_x, ann_y_base + row_gap * 2), align=TextEntityAlignment.CENTER)
 
         # Bend allowance
+        ba_str = f"BA={br.bend_allowance_mm:.2f}" if br.bend_allowance_mm is not None else "BA=?"
         msp.add_text(
-            f"BA={br.bend_allowance_mm:.2f}",
+            ba_str,
             dxfattribs={"layer": "ANNOTATIONS", "height": 3.5},
         ).set_placement((line_x, ann_y_base + row_gap * 3), align=TextEntityAlignment.CENTER)
 
-        # Direction arrow indicator
-        arrow_char = "▲" if br.direction == "UP" else "▼"  # ▲ or ▼
+        # Direction indicator
+        arrow_char = {"UP": "^", "DOWN": "v"}.get(br.direction, "")
         msp.add_text(
             arrow_char + br.direction,
             dxfattribs={"layer": "ANNOTATIONS", "height": 4.0},
@@ -157,12 +160,12 @@ def _draw_bending_title_block(
     msp.add_line((x0 + mid, y0), (x0 + mid, y0 + tb_h), dxfattribs=attribs)
 
     today = date.today().strftime("%Y-%m-%d")
-    k = part.bends[0].k_factor if part.bends else 0.33
+    k = part.bends[0].k_factor if part.bends else None
     entries = [
         (0, "PART NO:", part.part_id),
         (1, "MATERIAL:", part.material or part.material_code or "N/A"),
         (2, "THICKNESS:", f"{part.thickness_mm:.2f} mm" if part.thickness_mm else "N/A"),
-        (3, "K-FACTOR:", f"{k:.2f}"),
+        (3, "K-FACTOR:", f"{k:.2f}" if k is not None else "N/A"),
         (4, "BLANK LENGTH:", f"{blank_length:.2f} mm"),
         (5, "DATE:", today),
     ]
@@ -219,11 +222,13 @@ def _generate_bending_pdf(
         c.setFont("Helvetica-Bold", 8)
         c.drawCentredString(bx_pt, y0 + profile_h_pt + 14, f"B{br.bend_id}")
         c.setFont("Helvetica", 7)
-        c.drawCentredString(bx_pt, y0 + profile_h_pt + 24, f"{br.angle_deg:.1f}°")
-        c.drawCentredString(bx_pt, y0 + profile_h_pt + 33, f"R{br.radius_mm:.1f}")
-        c.drawCentredString(bx_pt, y0 + profile_h_pt + 42, f"BA={br.bend_allowance_mm:.2f}")
-        arrow = "▲" if br.direction == "UP" else "▼"
-        c.drawCentredString(bx_pt, y0 + profile_h_pt + 51, arrow + br.direction)
+        angle_str = f"{br.angle_deg:.1f}deg" if br.angle_deg is not None else "?deg"
+        radius_str = f"R{br.radius_mm:.1f}" if br.radius_mm is not None else "R?"
+        ba_str = f"BA={br.bend_allowance_mm:.2f}" if br.bend_allowance_mm is not None else "BA=?"
+        c.drawCentredString(bx_pt, y0 + profile_h_pt + 24, angle_str)
+        c.drawCentredString(bx_pt, y0 + profile_h_pt + 33, radius_str)
+        c.drawCentredString(bx_pt, y0 + profile_h_pt + 42, ba_str)
+        c.drawCentredString(bx_pt, y0 + profile_h_pt + 51, br.direction)
         c.setDash([6, 3], 0)
 
     c.setDash([], 0)
@@ -237,13 +242,13 @@ def _generate_bending_pdf(
     # Notes block
     notes_x = page_w - margin - 200
     notes_y = margin
-    k = part.bends[0].k_factor if part.bends else 0.33
+    k = part.bends[0].k_factor if part.bends else None
     today = date.today().strftime("%Y-%m-%d")
     note_lines = [
         f"Part No: {part.part_id}",
         f"Material: {part.material or part.material_code or 'N/A'}",
         f"Thickness: {part.thickness_mm:.2f} mm" if part.thickness_mm else "Thickness: N/A",
-        f"K-Factor: {k:.2f}",
+        f"K-Factor: {k:.2f}" if k is not None else "K-Factor: N/A",
         f"Total Blank Length: {blank_length:.2f} mm",
         f"Bends: {part.bend_count}",
         f"Date: {today}",
@@ -277,6 +282,10 @@ def generate_bending_drawing(part: PartRecord, output_dir: str) -> tuple[str, Op
     os.makedirs(output_dir, exist_ok=True)
     safe_id = part.part_id.replace("/", "_").replace(" ", "_")
 
+    bb = part.bounding_box
+    L = float(bb["L"]) if bb and bb.get("L") is not None else None
+    W = float(bb["W"]) if bb and bb.get("W") is not None else None
+
     if not part.has_bends or part.bend_count == 0:
         # Flat cut only
         dxf_path = os.path.join(output_dir, f"{safe_id}_flatcut.dxf")
@@ -284,35 +293,66 @@ def generate_bending_drawing(part: PartRecord, output_dir: str) -> tuple[str, Op
         doc.units = units.MM
         msp = doc.modelspace()
         _setup_bend_layers(doc)
-        bb = part.bounding_box or {"L": 500.0, "W": 300.0, "H": 8.0}
-        L = float(bb.get("L", 500.0))
-        W = float(bb.get("W", 300.0))
-        msp.add_lwpolyline(
-            [(0, 0), (L, 0), (L, W), (0, W), (0, 0)],
-            dxfattribs={"layer": "PROFILE", "lineweight": 50},
-        )
-        msp.add_text(
-            f"FLAT CUT — NO BENDS\n{part.part_id}",
-            dxfattribs={"layer": "ANNOTATIONS", "height": 10.0},
-        ).set_placement((L / 2, W / 2), align=TextEntityAlignment.MIDDLE_CENTER)
+        if L is not None and W is not None:
+            msp.add_lwpolyline(
+                [(0, 0), (L, 0), (L, W), (0, W), (0, 0)],
+                dxfattribs={"layer": "PROFILE", "lineweight": 50},
+            )
+            msp.add_text(
+                f"FLAT CUT — NO BENDS\n{part.part_id}",
+                dxfattribs={"layer": "ANNOTATIONS", "height": 10.0},
+            ).set_placement((L / 2, W / 2), align=TextEntityAlignment.MIDDLE_CENTER)
+        else:
+            msp.add_text(
+                f"FLAT CUT — NO BENDS\n{part.part_id}\nGEOMETRY UNAVAILABLE",
+                dxfattribs={"layer": "ANNOTATIONS", "height": 10.0},
+            ).set_placement((0, 0), align=TextEntityAlignment.MIDDLE_CENTER)
         doc.saveas(dxf_path)
         logger.info("Flat cut DXF saved (no bends): %s", dxf_path)
         return dxf_path, None
 
-    # Calculate blank length from bend records
-    thickness = part.thickness_mm or 8.0
-    k_factor = part.bends[0].k_factor if part.bends else 0.33
+    # --- Bent part ---
+    thickness = part.thickness_mm
+    k_factor = part.bends[0].k_factor if part.bends else None
 
+    # Bend allowances (may contain None when bend geometry is unknown).
     bend_allowances = [b.bend_allowance_mm for b in part.bends]
+    ba_known = all(ba is not None for ba in bend_allowances)
 
-    # Distribute segments evenly
-    bb = part.bounding_box or {"L": 600.0, "W": 300.0, "H": thickness}
-    total_raw_length = float(bb.get("L", 600.0))
-    total_ba = sum(bend_allowances)
-    num_segments = part.bend_count + 1
-    segment_length = max(10.0, (total_raw_length - total_ba) / num_segments)
-    segments = [segment_length] * num_segments
-    blank_length = compute_flat_blank_length(segments, bend_allowances)
+    # Reconstruct straight segments from real BendRecord data when present.
+    segments: list[float] = []
+    if part.bends and all(b.segment_before_mm is not None for b in part.bends) \
+            and all(b.segment_after_mm is not None for b in part.bends):
+        segments.append(part.bends[0].segment_before_mm)
+        for b in part.bends:
+            segments.append(b.segment_after_mm)
+        segments_approx = False
+    elif L is not None and ba_known:
+        # Approximate: distribute the developed length evenly (annotated).
+        total_ba = sum(bend_allowances)
+        num_segments = part.bend_count + 1
+        segment_length = max(10.0, (L - total_ba) / num_segments)
+        segments = [segment_length] * num_segments
+        segments_approx = True
+    else:
+        # Not enough information to build a flat blank — emit honest note only.
+        dxf_path = os.path.join(output_dir, f"{safe_id}_bending.dxf")
+        doc = ezdxf.new("R2010")
+        doc.units = units.MM
+        msp = doc.modelspace()
+        _setup_bend_layers(doc)
+        msp.add_text(
+            f"BENDING DRAWING — {part.part_id}\n"
+            f"{part.bend_count} bend(s) detected, but bend geometry "
+            f"(angle/radius/segments) is unavailable.\n"
+            f"Refer to the source CAD / part drawing.",
+            dxfattribs={"layer": "ANNOTATIONS", "height": 8.0},
+        ).set_placement((0, 0), align=TextEntityAlignment.MIDDLE_CENTER)
+        doc.saveas(dxf_path)
+        logger.info("Bending DXF saved (geometry unavailable): %s", dxf_path)
+        return dxf_path, None
+
+    blank_length = compute_flat_blank_length(segments, [ba or 0.0 for ba in bend_allowances])
 
     # Compute bend positions (cumulative from left)
     bend_positions: list[float] = []
@@ -320,10 +360,10 @@ def generate_bending_drawing(part: PartRecord, output_dir: str) -> tuple[str, Op
     for i, br in enumerate(part.bends):
         cursor += segments[i]
         bend_positions.append(cursor)
-        cursor += br.bend_allowance_mm
+        cursor += (br.bend_allowance_mm or 0.0)
 
-    # Profile display height = min(W, 80)
-    profile_h = min(float(bb.get("W", 80.0)), 80.0)
+    # Profile display height
+    profile_h = min(W, 80.0) if W is not None else 80.0
 
     # --- DXF ---
     dxf_path = os.path.join(output_dir, f"{safe_id}_bending.dxf")
@@ -339,8 +379,11 @@ def generate_bending_drawing(part: PartRecord, output_dir: str) -> tuple[str, Op
     _draw_bending_title_block(msp, x0, y0 - 80.0, part, blank_length)
 
     # Blank length annotation
+    blank_label = f"BLANK LENGTH = {blank_length:.2f} mm"
+    if segments_approx:
+        blank_label += " (APPROX — segment split estimated from overall length)"
     msp.add_text(
-        f"BLANK LENGTH = {blank_length:.2f} mm",
+        blank_label,
         dxfattribs={"layer": "ANNOTATIONS", "height": 6.0},
     ).set_placement((x0 + blank_length / 2, y0 - 15), align=TextEntityAlignment.CENTER)
 

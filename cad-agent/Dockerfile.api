@@ -9,6 +9,14 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
+# STEP/IGES support: pythonocc-core is conda-only and cannot be pip-installed.
+# To enable real STEP/IGES parsing in this image, switch the base image to a
+# conda distribution and install the package, e.g.:
+#   FROM continuumio/miniconda3
+#   RUN conda install -y -c conda-forge pythonocc-core
+# Without it, the API still serves DXF flat patterns fully; STEP/IGES uploads
+# return a clear error instead of fabricated geometry.
+
 COPY app/ ./app/
 COPY data/ ./data/
 

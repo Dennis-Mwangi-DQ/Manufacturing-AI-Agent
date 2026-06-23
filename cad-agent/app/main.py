@@ -168,22 +168,49 @@ col_upload, col_info = st.columns([2, 1])
 with col_upload:
     st.subheader("Upload CAD File")
 
+    uploaded_files = None
+    upload_mode = "single"
     if demo_mode:
         st.info("Demo Mode active — click 'Run Demo' to see a sample pipeline result.")
         process_btn = st.button("Run Demo", type="primary", use_container_width=True)
         uploaded_file = None
     else:
-        uploaded_file = st.file_uploader(
-            "Choose a CAD file",
-            type=["stp", "step", "igs", "iges", "dxf"],
-            help=f"Supported formats: STEP, IGES, DXF. Maximum size: {MAX_FILE_MB} MB.",
+        upload_mode = st.radio(
+            "Upload mode",
+            ["Single file", "Folder / multiple files"],
+            horizontal=True,
         )
-        process_btn = st.button(
-            "Process File",
-            type="primary",
-            disabled=(uploaded_file is None),
-            use_container_width=True,
-        )
+        if upload_mode == "Single file":
+            uploaded_file = st.file_uploader(
+                "Choose a CAD file",
+                type=["stp", "step", "igs", "iges", "dxf"],
+                help=f"Supported formats: STEP, IGES, DXF. Maximum size: {MAX_FILE_MB} MB.",
+            )
+            process_btn = st.button(
+                "Process File",
+                type="primary",
+                disabled=(uploaded_file is None),
+                use_container_width=True,
+            )
+        else:
+            uploaded_file = None
+            uploaded_files = st.file_uploader(
+                "Select all files in the folder (or upload a .zip of it)",
+                type=["stp", "step", "igs", "iges", "dxf", "zip"],
+                accept_multiple_files=True,
+                help="Open the folder, select all files (Ctrl+A) and drop them here, "
+                     "or zip the folder and upload the single .zip.",
+            )
+            st.caption(
+                "All files are consolidated into ONE package. Duplicate part "
+                "numbers are merged and quantities summed."
+            )
+            process_btn = st.button(
+                "Process Folder",
+                type="primary",
+                disabled=(not uploaded_files),
+                use_container_width=True,
+            )
 
 with col_info:
     st.subheader("Pipeline Steps")
@@ -216,6 +243,39 @@ if process_btn:
         st.session_state["result"] = result
         st.session_state["demo"] = True
         st.session_state["bom_df"] = pd.DataFrame(DEMO_BOM)
+    elif upload_mode == "Folder / multiple files":
+        if not uploaded_files:
+            st.error("Please select the folder's files (or a .zip) first.")
+        else:
+            with st.spinner(f"Processing {len(uploaded_files)} file(s) into one package..."):
+                try:
+                    multipart = [
+                        ("files", (f.name, f.getvalue(), "application/octet-stream"))
+                        for f in uploaded_files
+                    ]
+                    response = requests.post(f"{API_BASE_URL}/upload_batch", files=multipart, timeout=900)
+
+                    if response.status_code == 200:
+                        st.session_state["result"] = response.json()
+                        st.session_state["demo"] = False
+                        st.session_state.pop("bom_df", None)
+                    else:
+                        try:
+                            detail = response.json().get("detail", response.text)
+                        except Exception:
+                            detail = response.text
+                        st.error(f"Batch error ({response.status_code}): {detail}")
+                        st.session_state.pop("result", None)
+
+                except requests.exceptions.ConnectionError:
+                    st.error(
+                        "Cannot connect to the CAD Agent API. "
+                        "Make sure the FastAPI server is running: `uvicorn app.api:app --reload`"
+                    )
+                except requests.exceptions.Timeout:
+                    st.error("Request timed out. The folder may be too large.")
+                except Exception as exc:
+                    st.error(f"Unexpected error: {exc}")
     else:
         if uploaded_file is None:
             st.error("Please upload a CAD file first.")

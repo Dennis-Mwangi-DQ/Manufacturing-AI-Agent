@@ -5,8 +5,8 @@ Uses ezdxf R2010 format for maximum CAD software compatibility.
 from __future__ import annotations
 
 import logging
-import math
 import os
+import shutil
 from datetime import date
 from typing import Optional
 
@@ -71,10 +71,16 @@ def _add_title_block(msp, x_origin: float, y_origin: float, part: PartRecord) ->
 
     # Title block text
     today = date.today().strftime("%Y-%m-%d")
+    mat_val = part.material or part.material_code or "N/A"
+    if part.material_inferred and mat_val != "N/A":
+        mat_val += " (INFERRED)"
+    thk_val = f"{part.thickness_mm:.1f} mm" if part.thickness_mm else "N/A"
+    if part.thickness_mm and part.thickness_source == "filename":
+        thk_val += " (FILE)"
     fields = [
         (0, "PART NO:", part.part_id),
-        (1, "MATERIAL:", part.material or (part.material_code or "N/A")),
-        (2, "THICKNESS:", f"{part.thickness_mm:.1f} mm" if part.thickness_mm else "N/A"),
+        (1, "MATERIAL:", mat_val),
+        (2, "THICKNESS:", thk_val),
         (3, "SCALE:", "1:1"),
         (4, "DATE:", today),
     ]
@@ -125,77 +131,72 @@ def _add_dimension_annotation(msp, x0: float, y0: float, L: float, W: float, thi
 
 def generate_dxf_flat(part: PartRecord, output_dir: str) -> str:
     """
-    Generate one DXF flat drawing for a sheet metal part.
-    Returns path to generated DXF.
+    Produce a DXF flat drawing for a sheet metal part.
+
+    If the part originated from a DXF flat pattern, the real source geometry is
+    passed through unchanged (the input already IS the flat pattern). Otherwise
+    a bounding-box outline is drawn from the real measured extents, clearly
+    annotated as an approximation. No holes or bend lines are ever invented.
+
+    Returns the path to the generated/copied DXF.
     """
     os.makedirs(output_dir, exist_ok=True)
     safe_id = part.part_id.replace("/", "_").replace(" ", "_")
     dxf_path = os.path.join(output_dir, f"{safe_id}_flat.dxf")
 
+    # --- Pass through real source DXF geometry when available ---
+    src = part.source_path
+    if src and src.lower().endswith(".dxf") and os.path.exists(src):
+        try:
+            shutil.copyfile(src, dxf_path)
+            logger.info("DXF flat drawing copied from source: %s", dxf_path)
+            return dxf_path
+        except OSError as exc:
+            logger.warning("Could not copy source DXF (%s); drawing outline instead.", exc)
+
+    # --- Otherwise draw the real bounding-box outline (approximation) ---
     doc = ezdxf.new("R2010")
     doc.units = units.MM
     msp = doc.modelspace()
-
     _setup_layers(doc)
 
-    # Geometry from bounding box
-    bb = part.bounding_box or {"L": 500.0, "W": 300.0, "H": 8.0}
-    L = float(bb.get("L", 500.0))
-    W = float(bb.get("W", 300.0))
-    thickness = part.thickness_mm or float(bb.get("H", 8.0))
+    bb = part.bounding_box
+    if not bb or bb.get("L") is None or bb.get("W") is None:
+        # No real extents — emit an honest note rather than a fake rectangle.
+        msp.add_text(
+            f"{part.part_id}\nGEOMETRY UNAVAILABLE — refer to source CAD file",
+            dxfattribs={"layer": "3_ANNOTATIONS", "height": 8.0},
+        ).set_placement((0, 0), align=TextEntityAlignment.MIDDLE_CENTER)
+        doc.saveas(dxf_path)
+        logger.info("DXF flat drawing (no geometry) saved: %s", dxf_path)
+        return dxf_path
 
-    # Drawing origin
-    x0, y0 = 20.0, 70.0  # leave room for title block below
+    L = float(bb.get("L"))
+    W = float(bb.get("W"))
+    thickness = part.thickness_mm
 
-    # --- 0_OUTLINE: outer rectangle ---
+    x0, y0 = 20.0, 70.0
+
+    # Outer bounding-box rectangle (real overall extents).
     msp.add_lwpolyline(
         [(x0, y0), (x0 + L, y0), (x0 + L, y0 + W), (x0, y0 + W), (x0, y0)],
         dxfattribs={"layer": "0_OUTLINE", "lineweight": 50},
     )
 
-    # --- 1_HOLES: circular cutouts (heuristic: 1 hole per 10 faces, max 8) ---
-    face_count = getattr(part, "face_count", 0) or 0
-    num_holes = min(int(face_count / 10), 8)
-    hole_radius = min(L, W) * 0.03  # 3% of smallest dimension
-    hole_radius = max(5.0, min(hole_radius, 30.0))
-
-    if num_holes > 0:
-        cols = max(1, int(math.sqrt(num_holes)))
-        rows = math.ceil(num_holes / cols)
-        x_spacing = L / (cols + 1)
-        y_spacing = W / (rows + 1)
-        holes_drawn = 0
-        for row in range(rows):
-            for col in range(cols):
-                if holes_drawn >= num_holes:
-                    break
-                cx = x0 + (col + 1) * x_spacing
-                cy = y0 + (row + 1) * y_spacing
-                msp.add_circle(
-                    center=(cx, cy),
-                    radius=hole_radius,
-                    dxfattribs={"layer": "1_HOLES", "lineweight": 35},
-                )
-                holes_drawn += 1
-
-    # --- 2_BEND_LINES: dashed lines for bends ---
-    if part.has_bends and part.bend_count > 0:
-        bend_spacing = W / (part.bend_count + 1)
-        for i in range(1, part.bend_count + 1):
-            by = y0 + i * bend_spacing
-            msp.add_line(
-                (x0, by),
-                (x0 + L, by),
-                dxfattribs={"layer": "2_BEND_LINES", "lineweight": 25, "linetype": "DASHED"},
-            )
-            # Bend label
-            msp.add_text(
-                f"B{i}",
-                dxfattribs={"layer": "3_ANNOTATIONS", "height": 4.0},
-            ).set_placement((x0 - 10, by), align=TextEntityAlignment.RIGHT)
-
-    # --- 3_ANNOTATIONS: dimensions ---
+    # Dimensions (real).
     _add_dimension_annotation(msp, x0, y0, L, W, thickness)
+
+    # Approximation notice — the true profile/holes are not reconstructed here.
+    msp.add_text(
+        "OUTLINE = OVERALL BOUNDING BOX (approx.) — see source CAD for true profile",
+        dxfattribs={"layer": "3_ANNOTATIONS", "height": 4.0},
+    ).set_placement((x0, y0 - 18), align=TextEntityAlignment.LEFT)
+
+    if part.has_bends and part.bend_count > 0:
+        msp.add_text(
+            f"BENDS: {part.bend_count} (see bending drawing)",
+            dxfattribs={"layer": "3_ANNOTATIONS", "height": 4.0},
+        ).set_placement((x0, y0 - 26), align=TextEntityAlignment.LEFT)
 
     # Part ID annotation
     msp.add_text(
@@ -205,18 +206,18 @@ def generate_dxf_flat(part: PartRecord, output_dir: str) -> str:
 
     # Material annotation
     mat_str = part.material or part.material_code or "N/A"
-    if part.material_inferred:
+    if part.material_inferred and mat_str != "N/A":
         mat_str += " (INFERRED)"
     msp.add_text(
         f"MAT: {mat_str}",
         dxfattribs={"layer": "3_ANNOTATIONS", "height": 3.5},
     ).set_placement((x0 + L + 12, y0 + W + 2), align=TextEntityAlignment.LEFT)
 
-    # --- 4_TITLE_BLOCK ---
+    # Title block
     tb_x = x0 + L - 130.0
     tb_y = y0 - 60.0
     _add_title_block(msp, max(x0, tb_x), tb_y, part)
 
     doc.saveas(dxf_path)
-    logger.info("DXF flat drawing saved: %s", dxf_path)
+    logger.info("DXF flat drawing (bbox outline) saved: %s", dxf_path)
     return dxf_path

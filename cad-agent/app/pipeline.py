@@ -269,11 +269,15 @@ def run_pipeline(file_path: str, original_filename: str) -> PipelineResult:
     # ----------------------------------------------------------------
     # Step 10: Logging
     # ----------------------------------------------------------------
-    session_log.status = "FAILED" if errors and not parts else ("PARTIAL" if warnings else "SUCCESS")
-    if not errors:
-        session_log.status = "SUCCESS"
-    elif parts:
+    # Honest status: no real parts == failure (never report SUCCESS on nothing).
+    if not parts:
+        session_log.status = "FAILED"
+        if not errors:
+            errors.append("No parts could be extracted from the CAD file.")
+    elif errors:
         session_log.status = "PARTIAL"
+    else:
+        session_log.status = "SUCCESS"
 
     logged = _log_to_supabase(session_log, settings)
     if not logged:

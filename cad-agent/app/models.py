@@ -10,13 +10,16 @@ from pydantic import BaseModel, Field
 class BendRecord(BaseModel):
     bend_id: int
     part_id: str
-    angle_deg: float
-    radius_mm: float
-    direction: str  # "UP" or "DOWN"
-    k_factor: float
-    bend_allowance_mm: float
-    segment_before_mm: float
-    segment_after_mm: float
+    # Angle/radius may be unknown when a bend line is detected in a flat
+    # pattern but its parameters cannot be read from geometry. They are left
+    # as None rather than fabricated.
+    angle_deg: Optional[float] = None
+    radius_mm: Optional[float] = None
+    direction: str = "UNKNOWN"  # "UP", "DOWN", or "UNKNOWN"
+    k_factor: Optional[float] = None
+    bend_allowance_mm: Optional[float] = None
+    segment_before_mm: Optional[float] = None
+    segment_after_mm: Optional[float] = None
 
 
 class PartRecord(BaseModel):
@@ -27,11 +30,14 @@ class PartRecord(BaseModel):
     material: Optional[str] = None
     material_code: Optional[str] = None
     thickness_mm: Optional[float] = None
+    thickness_source: Optional[str] = None  # e.g. "geometry", "filename", None
     mass_kg: Optional[float] = None
     volume_mm3: Optional[float] = None
+    surface_area_mm2: Optional[float] = None
     bounding_box: Optional[dict] = None  # {"L": float, "W": float, "H": float}
     parent_assembly: Optional[str] = None
     bom_level: int = 0
+    source_path: Optional[str] = None  # original CAD file this part came from
     has_bends: bool = False
     bend_count: int = 0
     bends: list[BendRecord] = Field(default_factory=list)
